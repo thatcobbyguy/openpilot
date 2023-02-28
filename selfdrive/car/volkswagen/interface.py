@@ -46,9 +46,30 @@ class CarInterface(CarInterfaceBase):
     )
     return out + friction + g_lat_accel * 0.7
   
+  
+  @staticmethod
+  def torque_from_lateral_accel_golf_mk7(lateral_accel_value, torque_params, lateral_accel_error, lateral_accel_deadzone, friction_compensation, v_ego, g_lat_accel, lateral_jerk_desired):
+    ANGLE_COEF = 0.19094367
+    ANGLE_COEF2 = 0.14250309
+    SPEED_OFFSET = 0.06307861
+    SIGMOID_COEF_RIGHT = 0.42
+    SIGMOID_COEF_LEFT = 0.42
+    SPEED_COEF = 0.69936411
+    x = ANGLE_COEF * (lateral_accel_value) * (40.23 / (max(0.2,v_ego + SPEED_OFFSET))**SPEED_COEF)
+    sigmoid = erf(x)
+    out = ((SIGMOID_COEF_RIGHT if lateral_accel_value < 0. else SIGMOID_COEF_LEFT) * sigmoid) + ANGLE_COEF2 * lateral_accel_value
+    friction = interp(
+      lateral_jerk_desired,
+      [-FRICTION_THRESHOLD_LAT_JERK, FRICTION_THRESHOLD_LAT_JERK],
+      [-torque_params.friction, torque_params.friction]
+    )
+    return out + friction + g_lat_accel * 0.7
+  
   def torque_from_lateral_accel(self) -> TorqueFromLateralAccelCallbackType:
     if self.CP.carFingerprint == CAR.PASSAT_NMS:
       return self.torque_from_lateral_accel_passat_nms
+    elif self.CP.carFingerprint == CAR.GOLF_MK7:
+      return self.torque_from_lateral_accel_golf_mk7
     else:
       return CarInterfaceBase.torque_from_lateral_accel_linear
 
@@ -146,6 +167,8 @@ class CarInterface(CarInterfaceBase):
     elif candidate == CAR.GOLF_MK7:
       ret.mass = 1397 + STD_CARGO_KG
       ret.wheelbase = 2.62
+      CarInterfaceBase.configure_torque_tune(candidate, ret.lateralTuning)
+      ret.lateralTuning.torque.kf = 1.0 # use this, not lat_accel_factor, to adjust kf
 
     elif candidate == CAR.JETTA_MK7:
       ret.mass = 1328 + STD_CARGO_KG
