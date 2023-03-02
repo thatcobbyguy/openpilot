@@ -20,6 +20,15 @@ BUTTONS_DICT = {CruiseButtons.RES_ACCEL: ButtonType.accelCruise, CruiseButtons.D
 
 FRICTION_THRESHOLD_LAT_JERK = 2.0
 
+def get_steer_feedforward_erf1(angle, speed, ANGLE_COEF, ANGLE_COEF2, ANGLE_OFFSET, SPEED_OFFSET, SIGMOID_COEF_RIGHT, SIGMOID_COEF_LEFT, SPEED_COEF, SPEED_COEF2, SPEED_OFFSET2):
+  x = ANGLE_COEF * (angle + ANGLE_OFFSET) * (40.23 / (max(0.05,speed + SPEED_OFFSET))**SPEED_COEF)
+  sigmoid_factor = (SIGMOID_COEF_RIGHT if (angle + ANGLE_OFFSET) < 0. else SIGMOID_COEF_LEFT)
+  sigmoid = erf(x)
+  sigmoid *= sigmoid_factor * sigmoid_factor
+  sigmoid *= (40.23 / (max(0.05,speed + SPEED_OFFSET2))**SPEED_COEF2)
+  linear = ANGLE_COEF2 * (angle + ANGLE_OFFSET)
+  return sigmoid + linear
+
 class CarInterface(CarInterfaceBase):
   @staticmethod
   def get_pid_accel_limits(CP, current_speed, cruise_speed):
@@ -46,40 +55,43 @@ class CarInterface(CarInterfaceBase):
     
   @staticmethod
   def torque_from_lateral_accel_volt(lateral_accel_value, torque_params, lateral_accel_error, lateral_accel_deadzone, friction_compensation, v_ego, g_lat_accel, lateral_jerk_desired):
-    ANGLE_COEF = 0.08617848
-    ANGLE_COEF2 = 0.12568428
-    SPEED_OFFSET = -3.48009247
-    SIGMOID_COEF_RIGHT = 0.504
-    SIGMOID_COEF_LEFT = 0.45
-    SPEED_COEF = 0.55322718
-    x = ANGLE_COEF * (lateral_accel_value) * (40.23 / (max(0.2,v_ego + SPEED_OFFSET))**SPEED_COEF)
-    sigmoid = erf(x)
-    out = ((SIGMOID_COEF_RIGHT if lateral_accel_value < 0. else SIGMOID_COEF_LEFT) * sigmoid) + ANGLE_COEF2 * lateral_accel_value
+    ANGLE_COEF = 0.15461558
+    ANGLE_COEF2 = 0.22491234
+    ANGLE_OFFSET = 0.0#-0.01173257
+    SPEED_OFFSET = 2.37065180
+    SIGMOID_COEF_RIGHT = 0.14917052
+    SIGMOID_COEF_LEFT = 0.13559770
+    SPEED_COEF = 0.49912791
+    SPEED_COEF2 = 0.37766423
+    SPEED_OFFSET2 = -0.36618369
+
+    ff = get_steer_feedforward_erf1(lateral_accel_value, v_ego, ANGLE_COEF, ANGLE_COEF2, ANGLE_OFFSET, SPEED_OFFSET, SIGMOID_COEF_RIGHT, SIGMOID_COEF_LEFT, SPEED_COEF, SPEED_COEF2, SPEED_OFFSET2)
     friction = interp(
       lateral_jerk_desired,
       [-FRICTION_THRESHOLD_LAT_JERK, FRICTION_THRESHOLD_LAT_JERK],
       [-torque_params.friction, torque_params.friction]
     )
-    return out + friction + g_lat_accel * 0.6
+    return ff + friction + g_lat_accel * 0.6
   
   @staticmethod
   def torque_from_lateral_accel_bolt_euv(lateral_accel_value, torque_params, lateral_accel_error, lateral_accel_deadzone, friction_compensation, v_ego, g_lat_accel, lateral_jerk_desired):
-    ANGLE_COEF = 0.79289935
-    ANGLE_COEF2 = 0.24485508
-    SPEED_OFFSET = 1.00000000
-    SIGMOID_COEF_RIGHT = 0.30436939
-    SIGMOID_COEF_LEFT = 0.22542412
-    SPEED_COEF = 0.77320476
+    ANGLE_COEF = 0.12038141
+    ANGLE_COEF2 = 0.20606792
+    ANGLE_OFFSET = 0.0#0720524
+    SPEED_OFFSET = -0.63391381
+    SIGMOID_COEF_RIGHT = 0.12397734
+    SIGMOID_COEF_LEFT = 0.11149019
+    SPEED_COEF = 0.30227209
+    SPEED_COEF2 = 0.20079583
+    SPEED_OFFSET2 = -1.43326564
 
-    x = ANGLE_COEF * lateral_accel_value * (40.23 / (max(0.2,v_ego + SPEED_OFFSET))**SPEED_COEF)
-    sigmoid = erf(x)
-    out = ((SIGMOID_COEF_RIGHT if lateral_accel_value < 0. else SIGMOID_COEF_LEFT) * sigmoid) + ANGLE_COEF2 * lateral_accel_value
+    ff = get_steer_feedforward_erf1(lateral_accel_value, v_ego, ANGLE_COEF, ANGLE_COEF2, ANGLE_OFFSET, SPEED_OFFSET, SIGMOID_COEF_RIGHT, SIGMOID_COEF_LEFT, SPEED_COEF, SPEED_COEF2, SPEED_OFFSET2)
     friction = interp(
       lateral_jerk_desired,
       [-FRICTION_THRESHOLD_LAT_JERK, FRICTION_THRESHOLD_LAT_JERK],
       [-torque_params.friction, torque_params.friction]
     )
-    return out + friction + g_lat_accel * 0.6
+    return ff + friction + g_lat_accel * 0.6
   
   @staticmethod
   def torque_from_lateral_accel_bolt(lateral_accel_value, torque_params, lateral_accel_error, lateral_accel_deadzone, friction_compensation, v_ego, g_lat_accel, lateral_jerk_desired):
