@@ -1,17 +1,55 @@
 #!/usr/bin/env python3
 from cereal import car
+from common.numpy_fast import interp
 from common.params import Params
 from panda import Panda
 from selfdrive.car import STD_CARGO_KG, get_safety_config
 from selfdrive.car.chrysler.values import CAR, DBC, RAM_HD, RAM_DT, RAM_CARS, ChryslerFlags
-from selfdrive.car.interfaces import CarInterfaceBase
+from selfdrive.car.interfaces import CarInterfaceBase, TorqueFromLateralAccelCallbackType
 
 ButtonType = car.CarState.ButtonEvent.Type
 EventName = car.CarEvent.EventName
 GearShifter = car.CarState.GearShifter
 
+FRICTION_THRESHOLD_LAT_JERK = 2.0
 
 class CarInterface(CarInterfaceBase):
+  @staticmethod
+  def torque_from_lateral_accel_ram1500(lateral_accel_value, torque_params, lateral_accel_error, lateral_accel_deadzone, friction_compensation, v_ego, g_lat_accel, lateral_jerk_desired):
+    ANGLE_COEF = 3.79351891
+    ANGLE_COEF2 = 0.22
+    ANGLE_OFFSET = 0.0#-0.00190703
+    SPEED_OFFSET = 15.0
+    SIGMOID_COEF_RIGHT = 0.50
+    SIGMOID_COEF_LEFT = 0.48228739
+    SPEED_COEF = 2.0
+    SPEED_COEF2 = 0.1
+    SPEED_OFFSET2 = 30.0
+    
+    x = ANGLE_COEF * (lateral_accel_value + ANGLE_OFFSET) * (40.23 / (max(1.0,v_ego + SPEED_OFFSET))**SPEED_COEF)
+    sigmoid_factor = (SIGMOID_COEF_RIGHT if (lateral_accel_value + ANGLE_OFFSET) < 0. else SIGMOID_COEF_LEFT)
+    sigmoid = x / (1. + abs(x))
+    sigmoid *= sigmoid_factor * sigmoid_factor
+    sigmoid *= max(0.2, 40.23 / (max(1.0,v_ego + SPEED_OFFSET2))**SPEED_COEF2)
+    linear = ANGLE_COEF2 * (lateral_accel_value + ANGLE_OFFSET)
+    
+    ff = sigmoid + linear
+    
+    friction = interp(
+      lateral_jerk_desired,
+      [-FRICTION_THRESHOLD_LAT_JERK, FRICTION_THRESHOLD_LAT_JERK],
+      [-torque_params.friction, torque_params.friction]
+    )
+    
+    return ff + friction + g_lat_accel * 0.7
+    
+  def torque_from_lateral_accel(self) -> TorqueFromLateralAccelCallbackType:
+    if self.CP.carFingerprint == CAR.RAM_1500:
+      return self.torque_from_lateral_accel_ram1500
+    else:
+      return CarInterfaceBase.torque_from_lateral_accel_linear
+    
+    
   @staticmethod
   def _get_params(ret, candidate, fingerprint, car_fw, experimental_long):
     ret.carName = "chrysler"
@@ -65,9 +103,10 @@ class CarInterface(CarInterfaceBase):
       CarInterfaceBase.configure_torque_tune(candidate, ret.lateralTuning)
       ret.minSteerSpeed = 0.5
       ret.minSteerSpeed = 14.5
-      for fw in car_fw:
-        if fw.ecu == 'eps' and fw.fwVersion.startswith((b"68312176", b"68273275")):
-          ret.minSteerSpeed = 0.
+      # Older EPS FW allow steer to zero
+      if any(fw.ecu == 'eps' and fw.fwVersion[:4] <= b"6831" for fw in car_fw):
+        ret.minSteerSpeed = 0.
+      
 
     elif candidate == CAR.RAM_HD:
       stiffnessFactor = 0.35
