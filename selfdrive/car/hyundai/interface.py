@@ -49,10 +49,41 @@ class CarInterface(CarInterfaceBase):
     )
     
     return ff + friction + g_lat_accel * 0.7
+  
+  @staticmethod
+  def torque_from_lateral_accel_palisade2020(lateral_accel_value, torque_params, lateral_accel_error, lateral_accel_deadzone, friction_compensation, v_ego, g_lat_accel, lateral_jerk_desired):
+    ANGLE_COEF = 5.0
+    ANGLE_COEF2 = 0.22
+    ANGLE_OFFSET = -0.01495356
+    SPEED_OFFSET = 15.0
+    SIGMOID_COEF_RIGHT = 0.5
+    SIGMOID_COEF_LEFT = 0.49297917
+    SPEED_COEF = 1.65453498
+    SPEED_COEF2 = 0.60746290
+    SPEED_OFFSET2 = 30.0
+    
+    x = ANGLE_COEF * (lateral_accel_value + ANGLE_OFFSET) * (40.23 / (max(1.0,v_ego + SPEED_OFFSET))**SPEED_COEF)
+    sigmoid_factor = (SIGMOID_COEF_RIGHT if (lateral_accel_value + ANGLE_OFFSET) < 0. else SIGMOID_COEF_LEFT)
+    sigmoid = x / (1. + abs(x))
+    sigmoid *= sigmoid_factor * sigmoid_factor
+    sigmoid *= max(0.2, 40.23 / (max(1.0,v_ego + SPEED_OFFSET2))**SPEED_COEF2)
+    linear = ANGLE_COEF2 * (lateral_accel_value + ANGLE_OFFSET)
+    
+    ff = sigmoid + linear
+    
+    friction = interp(
+      lateral_jerk_desired,
+      [-FRICTION_THRESHOLD_LAT_JERK, FRICTION_THRESHOLD_LAT_JERK],
+      [-torque_params.friction, torque_params.friction]
+    )
+    
+    return ff + friction + g_lat_accel * 0.7
     
   def torque_from_lateral_accel(self) -> TorqueFromLateralAccelCallbackType:
     if self.CP.carFingerprint in (CAR.SONATA, CAR.SONATA_HYBRID):
       return self.torque_from_lateral_accel_sonata2020
+    elif self.CP.carFingerprint == CAR.PALISADE:
+      return self.torque_from_lateral_accel_palisade2020
     else:
       return CarInterfaceBase.torque_from_lateral_accel_linear
     
@@ -102,6 +133,7 @@ class CarInterface(CarInterfaceBase):
       ret.wheelbase = 2.804
       ret.steerRatio = 13.27 * 1.15   # 15% higher at the center seems reasonable
     elif candidate == CAR.PALISADE:
+      CarInterfaceBase.configure_torque_tune(candidate, ret.lateralTuning)
       ret.mass = 1999. + STD_CARGO_KG
       ret.wheelbase = 2.90
       ret.steerRatio = 15.6 * 1.15
