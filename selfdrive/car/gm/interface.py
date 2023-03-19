@@ -18,7 +18,7 @@ NetworkLocation = car.CarParams.NetworkLocation
 BUTTONS_DICT = {CruiseButtons.RES_ACCEL: ButtonType.accelCruise, CruiseButtons.DECEL_SET: ButtonType.decelCruise,
                 CruiseButtons.MAIN: ButtonType.altButton3, CruiseButtons.CANCEL: ButtonType.cancel}
 
-FRICTION_THRESHOLD_LAT_JERK = 2.0
+FRICTION_THRESHOLD_LAT_JERK = 0.5
 
 def get_steer_feedforward_erf1(angle, speed, ANGLE_COEF, ANGLE_COEF2, ANGLE_OFFSET, SPEED_OFFSET, SIGMOID_COEF_RIGHT, SIGMOID_COEF_LEFT, SPEED_COEF, SPEED_COEF2, SPEED_OFFSET2):
   x = ANGLE_COEF * (angle + ANGLE_OFFSET) * (40.23 / (max(0.05,speed + SPEED_OFFSET))**SPEED_COEF)
@@ -85,17 +85,16 @@ class CarInterface(CarInterfaceBase):
   
   @staticmethod
   def torque_from_lateral_accel_bolt_euv(lateral_accel_value, torque_params, lateral_accel_error, lateral_accel_deadzone, friction_compensation, v_ego, g_lat_accel, lateral_jerk_desired):
-    ANGLE_COEF = 0.12038141
-    ANGLE_COEF2 = 0.20606792
-    ANGLE_OFFSET = 0.0#0720524
-    SPEED_OFFSET = -0.63391381
-    SIGMOID_COEF_RIGHT = 0.12397734
-    SIGMOID_COEF_LEFT = 0.11149019
-    SPEED_COEF = 0.30227209
-    SPEED_COEF2 = 0.20079583
-    SPEED_OFFSET2 = -1.43326564
+    ANGLE_COEF = 0.79289935
+    ANGLE_COEF2 = 0.24485508
+    SPEED_OFFSET = 1.00000000
+    SIGMOID_COEF_RIGHT = 0.30436939
+    SIGMOID_COEF_LEFT = 0.22542412
+    SPEED_COEF = 0.77320476
 
-    ff = get_steer_feedforward_erf1(lateral_accel_value, v_ego, ANGLE_COEF, ANGLE_COEF2, ANGLE_OFFSET, SPEED_OFFSET, SIGMOID_COEF_RIGHT, SIGMOID_COEF_LEFT, SPEED_COEF, SPEED_COEF2, SPEED_OFFSET2)
+    x = ANGLE_COEF * lateral_accel_value * (40.23 / (max(0.2,v_ego + SPEED_OFFSET))**SPEED_COEF)
+    sigmoid = erf(x)
+    ff = ((SIGMOID_COEF_RIGHT if lateral_accel_value < 0. else SIGMOID_COEF_LEFT) * sigmoid) + ANGLE_COEF2 * lateral_accel_value
     friction = interp(
       lateral_jerk_desired,
       [-FRICTION_THRESHOLD_LAT_JERK, FRICTION_THRESHOLD_LAT_JERK],
