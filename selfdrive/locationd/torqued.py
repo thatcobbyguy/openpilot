@@ -10,7 +10,9 @@ from cereal import car, log
 from common.params import Params
 from common.realtime import config_realtime_process, DT_MDL
 from common.filter_simple import FirstOrderFilter
+from common.numpy_fast import sign, mean, clip
 from system.swaglog import cloudlog
+from selfdrive.car.interfaces import initialize_nnff
 from selfdrive.controls.lib.vehicle_model import ACCELERATION_DUE_TO_GRAVITY
 
 HISTORY = 5  # secs
@@ -32,6 +34,7 @@ LAT_ACC_THRESHOLD = 1
 STEER_BUCKET_BOUNDS = [(-0.5, -0.3), (-0.3, -0.2), (-0.2, -0.1), (-0.1, 0), (0, 0.1), (0.1, 0.2), (0.2, 0.3), (0.3, 0.5)]
 MIN_BUCKET_POINTS = np.array([100, 300, 500, 500, 500, 500, 300, 100])
 MIN_ENGAGE_BUFFER = 2  # secs
+KF_LIMITS = [0.5, 2.0]
 
 VERSION = 1  # bump this to invalidate old parameter caches
 ALLOWED_CARS = ['toyota', 'hyundai']
@@ -75,10 +78,10 @@ class PointBuckets:
   def is_valid(self):
     return all(len(v) >= min_pts for v, min_pts in zip(self.buckets.values(), self.buckets_min_points.values())) and (self.__len__() >= self.min_points_total)
 
-  def add_point(self, x, y):
+  def add_point(self, x, y, x_scale = 1.0):
     for bound_min, bound_max in self.x_bounds:
       if (x >= bound_min) and (x < bound_max):
-        self.buckets[(bound_min, bound_max)].append([x, 1.0, y])
+        self.buckets[(bound_min, bound_max)].append([x * x_scale, 1.0, y])
         break
 
   def get_points(self, num_points=None):
@@ -94,6 +97,9 @@ class PointBuckets:
 
 class TorqueEstimator:
   def __init__(self, CP, decimated=False):
+    self.nnff = initialize_nnff(CP.nnffFingerprint)
+    self.use_nn = (self.nnff is not None)
+      
     self.hist_len = int(HISTORY / DT_MDL)
     self.lag = CP.steerActuatorDelay + .2   # from controlsd
     if decimated:
@@ -118,6 +124,7 @@ class TorqueEstimator:
     if CP.lateralTuning.which() == 'torque':
       self.offline_friction = CP.lateralTuning.torque.friction
       self.offline_latAccelFactor = CP.lateralTuning.torque.latAccelFactor
+      self.offline_kf = CP.lateralTuning.torque.kf
 
     self.reset()
 
@@ -125,7 +132,8 @@ class TorqueEstimator:
       'latAccelFactor': self.offline_latAccelFactor,
       'latAccelOffset': 0.0,
       'frictionCoefficient': self.offline_friction,
-      'points': []
+      'points': [],
+      'kf' : 1.0,
     }
     self.decay = MIN_FILTER_DECAY
     self.min_lataccel_factor = (1.0 - self.factor_sanity) * self.offline_latAccelFactor
@@ -151,6 +159,13 @@ class TorqueEstimator:
           initial_params['points'] = cache_ltp.points
           self.decay = cache_ltp.decay
           self.filtered_points.load_points(initial_params['points'])
+          
+          # restore live kf
+          kf = cache_ltp.kf
+          if not KF_LIMITS[0] <= kf <= KF_LIMITS[1]:
+            kf = self.offline_kf
+          initial_params['kf'] = kf
+          
           cloudlog.info("restored torque params from cache")
       except Exception:
         cloudlog.exception("failed to restore cached torque params")
@@ -213,7 +228,8 @@ class TorqueEstimator:
         steer = np.interp(t, self.raw_points['carControl_t'], self.raw_points['steer_torque'])
         lateral_acc = (vego * yaw_rate) - (np.sin(roll) * ACCELERATION_DUE_TO_GRAVITY)
         if all(active) and (not any(steer_override)) and (vego > MIN_VEL) and (abs(steer) > STEER_MIN_THRESHOLD) and (abs(lateral_acc) <= LAT_ACC_THRESHOLD):
-          self.filtered_points.add_point(float(steer), float(lateral_acc))
+          x_scale = self.nnff.get_steer_cmd_scale(float(vego), float(lateral_acc)) if self.use_nn else 1.0
+          self.filtered_points.add_point(float(steer), float(lateral_acc), x_scale=x_scale)
 
   def get_msg(self, valid=True, with_points=False):
     msg = messaging.new_message('liveTorqueParameters')
@@ -227,6 +243,8 @@ class TorqueEstimator:
       liveTorqueParameters.latAccelFactorRaw = float(latAccelFactor)
       liveTorqueParameters.latAccelOffsetRaw = float(latAccelOffset)
       liveTorqueParameters.frictionCoefficientRaw = float(frictionCoeff)
+      kf = float(self.nnff.lat_accel_factor / latAccelFactor) if self.use_nn else 1.0
+      liveTorqueParameters.kfRaw = kf
 
       if any([val is None or np.isnan(val) for val in [latAccelFactor, latAccelOffset, frictionCoeff]]):
         cloudlog.exception("Live torque parameters are invalid.")
@@ -236,7 +254,7 @@ class TorqueEstimator:
         liveTorqueParameters.liveValid = True
         latAccelFactor = np.clip(latAccelFactor, self.min_lataccel_factor, self.max_lataccel_factor)
         frictionCoeff = np.clip(frictionCoeff, self.min_friction, self.max_friction)
-        self.update_params({'latAccelFactor': latAccelFactor, 'latAccelOffset': latAccelOffset, 'frictionCoefficient': frictionCoeff})
+        self.update_params({'latAccelFactor': latAccelFactor, 'latAccelOffset': latAccelOffset, 'frictionCoefficient': frictionCoeff, 'kf': kf})
     else:
       liveTorqueParameters.liveValid = False
 
@@ -249,6 +267,10 @@ class TorqueEstimator:
     liveTorqueParameters.totalBucketPoints = len(self.filtered_points)
     liveTorqueParameters.decay = self.decay
     liveTorqueParameters.maxResets = self.resets
+    
+    #liveKF
+    liveTorqueParameters.kf = float(self.filtered_params['kf'].x)
+    
     return msg
 
 
@@ -256,7 +278,7 @@ def main(sm=None, pm=None):
   config_realtime_process([0, 1, 2, 3], 5)
 
   if sm is None:
-    sm = messaging.SubMaster(['carControl', 'carState', 'liveLocationKalman'], poll=['liveLocationKalman'])
+    sm = messaging.SubMaster(['carControl', 'carState', 'liveLocationKalman', 'controlsState'], poll=['liveLocationKalman'])
 
   if pm is None:
     pm = messaging.PubMaster(['liveTorqueParameters'])

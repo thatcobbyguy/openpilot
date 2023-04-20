@@ -17,7 +17,7 @@ from system.version import is_release_branch, get_short_branch
 from selfdrive.boardd.boardd import can_list_to_can_capnp
 from selfdrive.car.car_helpers import get_car, get_startup_event, get_one_can
 from selfdrive.controls.lib.lane_planner import CAMERA_OFFSET
-from selfdrive.controls.lib.drive_helpers import VCruiseHelper, get_lag_adjusted_curvature
+from selfdrive.controls.lib.drive_helpers import VCruiseHelper, get_lag_adjusted_curvature, get_lag_adjusted_curvature_old
 from selfdrive.controls.lib.latcontrol import LatControl, MIN_LATERAL_CONTROL_SPEED
 from selfdrive.controls.lib.longcontrol import LongControl
 from selfdrive.controls.lib.latcontrol_pid import LatControlPID
@@ -166,6 +166,8 @@ class Controls:
       self.LaC = LatControlPID(self.CP, self.CI)
     elif self.CP.lateralTuning.which() == 'torque':
       self.LaC = LatControlTorque(self.CP, self.CI)
+    self.saturation_count_max = int(round(self.CP.steerLimitTimer / DT_CTRL))
+    self.saturation_count = 0
 
     self.initialized = False
     self.state = State.disabled
@@ -190,6 +192,8 @@ class Controls:
     self.steer_limited = False
     self.desired_curvature = 0.0
     self.desired_curvature_rate = 0.0
+    self.desired_curvature_debug = 0.0
+    self.desired_curvature_rate_debug = 0.0
     self.experimental_mode = False
     self.v_cruise_helper = VCruiseHelper(self.CP)
     self.recalibrating_seen = False
@@ -199,6 +203,7 @@ class Controls:
 
     self.live_torque = self.params.get_bool("LiveTorque")
     self.custom_torque = self.params.get_bool("CustomTorqueLateral")
+    self.nnff_alert_shown = False
 
     # TODO: no longer necessary, aside from process replay
     self.sm['liveParameters'].valid = True
@@ -252,6 +257,16 @@ class Controls:
     # no more events while in dashcam mode
     if self.read_only:
       return
+    
+    if not self.nnff_alert_shown and self.sm.frame % 1000 == 0 and self.CP.lateralTuning.which() == 'torque':
+      self.nnff_alert_shown = True
+      if self.LaC.use_nn:
+        if self.CI.ff_nn_model.test_passed:
+          self.events.add(EventName.torqueNNFFLoadSuccess)
+        else:
+          self.events.add(EventName.torqueNNFFLoadFailure)
+      else: 
+        self.events.add(EventName.torqueNNFFNotLoaded)
 
     # Block resume if cruise never previously enabled
     resume_pressed = any(be.type in (ButtonType.accelCruise, ButtonType.resumeCruise) for be in CS.buttonEvents)
@@ -621,7 +636,7 @@ class Controls:
     if self.CP.lateralTuning.which() == 'torque':
       torque_params = self.sm['liveTorqueParameters']
       if self.sm.all_checks(['liveTorqueParameters']) and (torque_params.useParams or self.live_torque) and not self.custom_torque:
-        self.LaC.update_live_torque_params(torque_params.latAccelFactorFiltered, torque_params.latAccelOffsetFiltered, torque_params.frictionCoefficientFiltered)
+        self.LaC.update_live_torque_params(torque_params)
 
     lat_plan = self.sm['lateralPlan']
     long_plan = self.sm['longitudinalPlan']
@@ -662,14 +677,20 @@ class Controls:
       actuators.accel = self.LoC.update(CC.longActive, CS, long_plan, pid_accel_limits, t_since_plan, self.experimental_mode)
 
       # Steering PID loop and lateral MPC
-      self.desired_curvature, self.desired_curvature_rate = get_lag_adjusted_curvature(self.CP, CS.vEgo,
+      self.desired_curvature_debug, self.desired_curvature_rate_debug = get_lag_adjusted_curvature_old(self.CP, CS.vEgo,
                                                                                        lat_plan.psis,
                                                                                        lat_plan.curvatures,
                                                                                        lat_plan.curvatureRates)
+      self.desired_curvature, self.desired_curvature_rate = get_lag_adjusted_curvature(self.CP, CS.vEgo,
+                                                                                       lat_plan.psis,
+                                                                                       lat_plan.curvatures,
+                                                                                       lat_plan.curvatureRates,
+                                                                                       long_plan.distances)
       actuators.steer, actuators.steeringAngleDeg, lac_log = self.LaC.update(CC.latActive, CS, self.VM, lp,
                                                                              self.last_actuators, self.steer_limited, self.desired_curvature,
                                                                              self.desired_curvature_rate, self.sm['liveLocationKalman'],
-                                                                             lat_plan=lat_plan)
+                                                                             lat_plan=lat_plan,
+                                                                             model_data=self.sm['modelV2'])
       actuators.curvature = self.desired_curvature
     else:
       lac_log = log.ControlsState.LateralDebugState.new_message()
@@ -699,7 +720,11 @@ class Controls:
         good_speed = CS.vEgo > 5
         max_torque = abs(self.last_actuators.steer) > 0.99
         if undershooting and turning and good_speed and max_torque:
-          lac_log.active and self.events.add(EventName.steerSaturated)
+          self.saturation_count += 1
+          if self.saturation_count > self.saturation_count_max:
+            self.events.add(EventName.steerSaturated)
+        else:
+          self.saturation_count = 0
       elif lac_log.saturated:
         dpath_points = lat_plan.dPathPoints
         if len(dpath_points):
@@ -714,7 +739,11 @@ class Controls:
           right_deviation = steering_value < 0 and dpath_points[0] > 0.20
 
           if left_deviation or right_deviation:
-            self.events.add(EventName.steerSaturated)
+            self.saturation_count += 1
+            if self.saturation_count > self.saturation_count_max:
+              self.events.add(EventName.steerSaturated)
+          else:
+            self.saturation_count = 0
 
     # Ensure no NaNs/Infs
     for p in ACTUATOR_FIELDS:
@@ -834,6 +863,8 @@ class Controls:
     controlsState.curvature = curvature
     controlsState.desiredCurvature = self.desired_curvature
     controlsState.desiredCurvatureRate = self.desired_curvature_rate
+    controlsState.desiredCurvatureDebug = self.desired_curvature_debug
+    controlsState.desiredCurvatureRateDebug = self.desired_curvature_rate_debug
     controlsState.state = self.state
     controlsState.engageable = not self.events.any(ET.NO_ENTRY)
     controlsState.longControlState = self.LoC.long_control_state

@@ -13,6 +13,7 @@ Version 0.9.3 (2023-06-20)
 
 Version 0.9.2 (2023-05-22)
 ========================
+* `dev-nicki-minaj` branch with twilsonco NNFF
 * New driving model
   * Reduced turn diving
   * Trained on a new dataset
