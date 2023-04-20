@@ -133,7 +133,10 @@ struct CarEvent @0x9b1657f34caf3ad3 {
     controlsMismatchLong @132;
     cruiseEngageBlocked @133;
 
-    autoHoldActivated @132;
+    autoHoldActivated @134;
+    torqueNNFFLoadSuccess @135;
+    torqueNNFFLoadFailure @136;
+    torqueNNFFNotLoaded @137;
 
     radarCanErrorDEPRECATED @15;
     communityFeatureDisallowedDEPRECATED @62;
@@ -463,6 +466,7 @@ struct CarParams {
   carName @0 :Text;
   carFingerprint @1 :Text;
   fuzzyFingerprint @55 :Bool;
+  nnffFingerprint @74 :Text;
 
   notCar @66 :Bool;  # flag for non-car robotics platforms
 
