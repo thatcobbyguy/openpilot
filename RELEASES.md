@@ -1,5 +1,9 @@
 Version 0.9.2 (2023-03-XX)
 ========================
+* sunny-torque-plus: 
+  * "lookahead" lateral jerk error for PID D response
+  * "lookahead" lateral jerk for feeforward friction (in addition to error-based friction compensation)
+  * downscaling of error and error-friction response in curves; let FF do the work
 * New driving model, trained on a new dataset
 * Draw MPC path instead of model predicted path, this is a more accurate representation of what the car will do.
 * Buick LaCrosse 2017-19 support thanks to koch-cf!
