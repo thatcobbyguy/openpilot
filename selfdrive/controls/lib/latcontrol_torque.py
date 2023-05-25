@@ -1,12 +1,13 @@
 import math
 
 from cereal import log
-from common.numpy_fast import interp
+from common.numpy_fast import interp, sign
 from common.params import Params
 from selfdrive.controls.lib.drive_helpers import apply_deadzone
 from selfdrive.controls.lib.latcontrol import LatControl
 from selfdrive.controls.lib.pid import PIDController
 from selfdrive.controls.lib.vehicle_model import ACCELERATION_DUE_TO_GRAVITY
+from selfdrive.modeld.constants import T_IDXS
 
 # At higher speeds (25+mph) we can assume:
 # Lateral acceleration achieved by a specific car correlates to
@@ -23,6 +24,20 @@ LOW_SPEED_X = [0, 10, 20, 30]
 LOW_SPEED_Y = [15, 13, 10, 5]
 
 LAT_PLAN_MIN_IDX = 5
+
+def get_lookahead_value(future_vals, current_val):
+  if len(future_vals) == 0:
+    return current_val
+  
+  same_sign_vals = [v for v in future_vals if sign(v) == sign(current_val)]
+  
+  # if any future val has opposite sign of current val, return 0
+  if len(same_sign_vals) < len(future_vals):
+    return 0.0
+  
+  # otherwise return the value with minimum absolute value
+  min_val = min(same_sign_vals + [current_val], key=lambda x: abs(x))
+  return min_val
 
 class LatControlTorque(LatControl):
   def __init__(self, CP, CI):
@@ -52,7 +67,7 @@ class LatControlTorque(LatControl):
       self.torque_params.friction = float(self.param_s.get("TorqueFriction", encoding="utf8")) * 0.01
       self._frame = 0
 
-  def update(self, active, CS, VM, params, last_actuators, steer_limited, desired_curvature, desired_curvature_rate, llk, curvatures):
+  def update(self, active, CS, VM, params, last_actuators, steer_limited, desired_curvature, desired_curvature_rate, llk, curvatures, lat_plan=None):
     self.update_live_tune()
     pid_log = log.ControlsState.LateralTorqueState.new_message()
 
@@ -72,6 +87,11 @@ class LatControlTorque(LatControl):
         actual_curvature = interp(CS.vEgo, [2.0, 5.0], [actual_curvature_vm, actual_curvature_llk])
         curvature_deadzone = 0.0
       desired_lateral_accel = desired_curvature * CS.vEgo ** 2
+      
+      lookahead = interp(CS.vEgo, [10.0, 30.0], [0.4, 1.2]) # seconds
+      lookahead_upper_idx = next((i for i, val in enumerate(T_IDXS) if val > lookahead), 16)
+      lookahead_curvature_rate = desired_curvature_rate if lat_plan is None else get_lookahead_value(list(lat_plan.curvatureRates)[LAT_PLAN_MIN_IDX:lookahead_upper_idx], desired_curvature_rate)
+      lookahead_lateral_jerk = lookahead_curvature_rate * CS.vEgo ** 2
 
       # desired rate is the desired rate of change in the setpoint, not the absolute desired curvature
       # desired_lateral_jerk = desired_curvature_rate * CS.vEgo ** 2
@@ -87,17 +107,26 @@ class LatControlTorque(LatControl):
       torque_from_measurement = self.torque_from_lateral_accel(measurement, self.torque_params, measurement,
                                                      lateral_accel_deadzone, friction_compensation=False)
       error = torque_from_setpoint - torque_from_measurement
+      
       error_scale_factor = 3.0
       max_future_lateral_accel = max([abs(i) * CS.vEgo**2 for i in list(curvatures)[LAT_PLAN_MIN_IDX:16]] + [abs(desired_lateral_accel)])
       error_scale_factor = 1.0 / (1.0 + min(apply_deadzone(max_future_lateral_accel, 0.4) * error_scale_factor, error_scale_factor - 1))
+      
+      error_rate = 0 if lookahead_lateral_jerk == 0.0 else (lookahead_lateral_jerk - actual_lateral_jerk) if self.use_steering_angle else 0.0
+      error_rate *= (self.error_scale_factor.x + 1.0) * 0.5
+      
       pid_log.error = error * error_scale_factor
       ff = self.torque_from_lateral_accel(gravity_adjusted_lateral_accel, self.torque_params,
                                           desired_lateral_accel - actual_lateral_accel,
                                           lateral_accel_deadzone, friction_compensation=True)
+      ff_friction = self.torque_from_lateral_accel(0.0, self.torque_params,
+                                          lookahead_lateral_jerk,
+                                          0.0, friction_compensation=True)
+      ff += ff_friction
 
       freeze_integrator = steer_limited or CS.steeringPressed or CS.vEgo < 5
       output_torque = self.pid.update(pid_log.error,
-                                      error_rate=(desired_lateral_jerk - actual_lateral_jerk) if self.use_steering_angle else 0.0,
+                                      error_rate=error_rate,
                                       feedforward=ff,
                                       speed=CS.vEgo,
                                       freeze_integrator=freeze_integrator)
