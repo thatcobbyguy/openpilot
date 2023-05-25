@@ -113,7 +113,7 @@ class LatControlTorque(LatControl):
       error_scale_factor = 1.0 / (1.0 + min(apply_deadzone(max_future_lateral_accel, 0.4) * error_scale_factor, error_scale_factor - 1))
       
       error_rate = 0 if lookahead_lateral_jerk == 0.0 else (lookahead_lateral_jerk - actual_lateral_jerk) if self.use_steering_angle else 0.0
-      error_rate *= (self.error_scale_factor.x + 1.0) * 0.5
+      error_rate *= (error_scale_factor + 1.0) * 0.5
       
       pid_log.error = error * error_scale_factor
       ff = self.torque_from_lateral_accel(gravity_adjusted_lateral_accel, self.torque_params,
