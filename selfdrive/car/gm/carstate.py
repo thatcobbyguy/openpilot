@@ -51,7 +51,7 @@ class CarState(CarStateBase):
     self.e2e_long_hold_gap = False
     self.resumeAllowed = False
     
-    self.autoHold = CP.carFingerprint != CAR.BOLT_EUV
+    self.autoHold = CP.carFingerprint not in [CAR.BOLT_EUV, CAR.ACADIA]
     self.autoHoldActive = False
     self.autoHoldActivated = False
     self.lastAutoHoldTime = 0.0
