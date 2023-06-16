@@ -117,9 +117,9 @@ class FluxModel:
       # Do it for a range of speeds and then we can interpolate between them.
       self.mean_slope_bp = [float(i) for i in np.arange(0, 40, speed_delta).tolist()]
       self.mean_slopes = [float(np.mean([self.evaluate([s, la])/la for la in np.arange(lat_accel_delta, 3.0, lat_accel_delta)])) for s in self.mean_slope_bp]
-    nnff_slope = interp(speed, self.mean_slope_bp, self.mean_slopes)
-    current_slope = self.evaluate([speed, lat_accel])/lat_accel
-    return nnff_slope / current_slope
+    nnff_mean_slope = interp(speed, self.mean_slope_bp, self.mean_slopes)
+    nnff_current_slope = self.evaluate([speed, lat_accel])/lat_accel
+    return nnff_mean_slope / nnff_current_slope
     
   def test(self, test_data: dict) -> str:
     num_passed = 0
