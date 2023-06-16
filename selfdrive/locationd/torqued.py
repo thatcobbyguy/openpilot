@@ -12,6 +12,7 @@ from common.realtime import config_realtime_process, DT_MDL
 from common.filter_simple import FirstOrderFilter
 from common.numpy_fast import sign, mean, clip
 from system.swaglog import cloudlog
+from selfdrive.car.interfaces import initialize_nnff
 from selfdrive.controls.lib.vehicle_model import ACCELERATION_DUE_TO_GRAVITY
 
 HISTORY = 5  # secs
@@ -236,10 +237,10 @@ class PointBuckets:
   def is_valid(self):
     return all(len(v) >= min_pts for v, min_pts in zip(self.buckets.values(), self.buckets_min_points.values())) and (self.__len__() >= self.min_points_total)
 
-  def add_point(self, x, y):
+  def add_point(self, x, y, y_scale = 1.0):
     for bound_min, bound_max in self.x_bounds:
       if (x >= bound_min) and (x < bound_max):
-        self.buckets[(bound_min, bound_max)].append([x, 1.0, y])
+        self.buckets[(bound_min, bound_max)].append([x, 1.0, y * y_scale])
         break
 
   def get_points(self, num_points=None):
@@ -256,6 +257,9 @@ class PointBuckets:
 class TorqueEstimator:
   def __init__(self, CP, decimated=False):
     self.live_kf = LiveKF(CP)
+    self.nnff = initialize_nnff(CP.nnffFingerprint)
+    self.use_nnff = (self.nnff is not None)
+      
     self.hist_len = int(HISTORY / DT_MDL)
     self.lag = CP.steerActuatorDelay + .2   # from controlsd
     if decimated:
@@ -381,7 +385,8 @@ class TorqueEstimator:
         steer = np.interp(t, self.raw_points['carControl_t'], self.raw_points['steer_torque'])
         lateral_acc = (vego * yaw_rate) - (np.sin(roll) * ACCELERATION_DUE_TO_GRAVITY)
         if all(active) and (not any(steer_override)) and (vego > MIN_VEL) and (abs(steer) > STEER_MIN_THRESHOLD) and (abs(lateral_acc) <= LAT_ACC_THRESHOLD):
-          self.filtered_points.add_point(float(steer), float(lateral_acc))
+          y_scale = self.nnff.get_slope_ratio(float(vego), float(lateral_acc), float(steer))
+          self.filtered_points.add_point(float(steer), float(lateral_acc), y_scale=y_scale)
 
   def get_msg(self, valid=True, with_points=False):
     self.live_kf.adjust_kf()

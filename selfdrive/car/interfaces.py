@@ -7,13 +7,13 @@ import os
 import ast
 import time
 from abc import abstractmethod, ABC
-from typing import Any, Dict, Optional, Tuple, List, Callable
+from typing import Any, Dict, Optional, Tuple, List, Callable, Union
 
 from cereal import car
 from common.basedir import BASEDIR
 from common.conversions import Conversions as CV
 from common.kalman.simple_kalman import KF1D
-from common.numpy_fast import clip
+from common.numpy_fast import clip, interp, sign
 from common.params import Params, put_nonblocking, put_bool_nonblocking
 from common.realtime import DT_CTRL
 from selfdrive.car import apply_hysteresis, gen_empty_fingerprint, scale_rot_inertia, scale_tire_stiffness
@@ -62,7 +62,9 @@ class FluxModel:
       for k, v in self.activation_function_names.items():
         activation = activation.replace(k, v)
       self.layers.append((W, b, activation))
-    
+      
+    self.mean_slope_bp = []
+    self.mean_slopes = []
     self.test(test_dict)
     if not self.test_passed:
       raise ValueError(f"NN FF model failed test: {params_file}")
@@ -86,11 +88,10 @@ class FluxModel:
 
   def evaluate(self, input_array):
     if len(input_array) != self.input_size:
-      # This can be used to discern between different "versions" of the NNFF model
-      # v1 has an input of 4 (v_ego, lateral_accel, lateral_jerk, roll)
-      # v2 has an input of 20 (v_ego, a_ego, lateral_accel, lateral_jerk, roll, <then three groups of five points with lat accel, lat jerk, and roll data for at one past point -0.3s, and four future points 0.3, 0.6, 1.1, 2.0s, where the 0.3s values are actually the "desired" values when calling the model>) 
-      if self.input_size == 4: # leave out a_ego and anything after the first 5 values
-        input_array = [input_array[0], input_array[1], input_array[2], -input_array[3]]
+      # If the input is length two, then it's a simplified evaluation with only speed and lateral acceleration.
+      # In that case, need to add on zeros to fill out the input array to match the correct length.
+      if len(input_array) == 2:
+        input_array = input_array + [0] * (self.input_size - 2)
       else:
         raise ValueError(f"Input array length {len(input_array)} does not match the expected length {self.input_size}")
         
@@ -102,7 +103,24 @@ class FluxModel:
     output_array = self.forward(input_array)
 
     return float(output_array[0, 0])
-  
+
+  # torqued uses a linear fit of steer command vs lateral accel.
+  # NNFF is non-linear for many cars, so we need to provide a way
+  # to "linearize" the recorded steer command so the linear fit
+  # still works.
+  def get_slope_ratio(self, speed, lat_accel, steer_cmd, speed_delta=3.0, lat_accel_delta=0.1):
+    if lat_accel == 0.0 or steer_cmd == 0.0 or sign(lat_accel) != sign(steer_cmd):
+      return 1.0
+    if len(self.mean_slope_bp) == 0 or len(self.mean_slope_bp) != len(self.mean_slopes):
+      # Compute the mean slope of the nnff from 0 to 3m/s^2 so
+      # that kf can be estimated in torqued from lateral accel.
+      # Do it for a range of speeds and then we can interpolate between them.
+      self.mean_slope_bp = [float(i) for i in np.arange(0, 40, speed_delta).tolist()]
+      self.mean_slopes = [float(np.mean([self.evaluate([s, la])/la for la in np.arange(lat_accel_delta, 3.0, lat_accel_delta)])) for s in self.mean_slope_bp]
+    nnff_slope = interp(speed, self.mean_slope_bp, self.mean_slopes)
+    measured_slope = steer_cmd / lat_accel
+    return nnff_slope / measured_slope
+    
   def test(self, test_data: dict) -> str:
     num_passed = 0
     num_failed = 0
@@ -150,6 +168,27 @@ class FluxModel:
       print(summary_str)
 
     return summary_str
+  
+def get_nn_ff_model_path(car):
+  return f"/data/openpilot/selfdrive/car/torque_data/lat_models/{car}.json"
+
+def has_nn_ff(car):
+  model_path = get_nn_ff_model_path(car)
+  if os.path.isfile(model_path):
+    return True
+  else:
+    return False
+  
+def initialize_nnff(car) -> Union[FluxModel, None]:
+  cloudlog.warning(f"Checking for lateral torque NN FF model for {car}...")
+  model = None
+  if has_nn_ff(car):
+    model = FluxModel(get_nn_ff_model_path(car))
+    cloudlog.warning(f"Lateral torque NN FF model loaded")
+    cloudlog.warning(model.summary(do_print=False))
+  else:
+    cloudlog.warning(f"No lateral torque NN FF model found for {car}")
+  return model
 
 def get_torque_params(candidate):
   with open(TORQUE_SUBSTITUTE_PATH) as f:
@@ -234,26 +273,9 @@ class CarInterfaceBase(ABC):
   def get_ff_nn(self, x):
     return self.ff_nn_model.evaluate(x)
   
-  def get_nn_ff_model_path(self, car):
-    return f"/data/openpilot/selfdrive/car/torque_data/lat_models/{car}.json"
-  
-  def has_nn_ff(self, car):
-    model_path = self.get_nn_ff_model_path(car)
-    if os.path.isfile(model_path):
-      return True
-    else:
-      return False
-  
   def initialize_ff_nn(self, car):
-    cloudlog.warning(f"Checking for lateral torque NN FF model for {car}...")
-    if self.has_nn_ff(car):
-      self.ff_nn_model = FluxModel(self.get_nn_ff_model_path(car))
-      cloudlog.warning(f"Lateral torque NN FF model loaded")
-      cloudlog.warning(self.ff_nn_model.summary(do_print=False))
-      return True
-    else:
-      cloudlog.warning(f"No lateral torque NN FF model found for {car}")
-      return False
+    self.ff_nn_model = initialize_nnff(car)
+    return (self.ff_nn_model is not None)
 
   @staticmethod
   def get_pid_accel_limits(CP, current_speed, cruise_speed):
