@@ -109,7 +109,7 @@ class FluxModel:
   # to "linearize" the recorded steer command so the linear fit
   # still works.
   def get_slope_ratio(self, speed, lat_accel, steer_cmd, speed_delta=3.0, lat_accel_delta=0.1):
-    if lat_accel == 0.0 or steer_cmd == 0.0 or sign(lat_accel) != sign(steer_cmd):
+    if lat_accel == 0.0:
       return 1.0
     if len(self.mean_slope_bp) == 0 or len(self.mean_slope_bp) != len(self.mean_slopes):
       # Compute the mean slope of the nnff from 0 to 3m/s^2 so
@@ -118,8 +118,8 @@ class FluxModel:
       self.mean_slope_bp = [float(i) for i in np.arange(0, 40, speed_delta).tolist()]
       self.mean_slopes = [float(np.mean([self.evaluate([s, la])/la for la in np.arange(lat_accel_delta, 3.0, lat_accel_delta)])) for s in self.mean_slope_bp]
     nnff_slope = interp(speed, self.mean_slope_bp, self.mean_slopes)
-    measured_slope = steer_cmd / lat_accel
-    return nnff_slope / measured_slope
+    current_slope = self.evaluate([speed, lat_accel])/lat_accel
+    return nnff_slope / current_slope
     
   def test(self, test_data: dict) -> str:
     num_passed = 0
