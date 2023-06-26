@@ -127,21 +127,17 @@ class LatControlTorque(LatControl):
       if self.use_nn:
         # prepare input data for NNFF model        
         roll = params.roll
-        if None not in [lat_plan, model_data] and len(model_data.velocity.x) == IDX_N and len(lat_plan.curvatures) == CONTROL_N:        
-          future_speeds = [CS.vEgo] + [math.sqrt(interp(t, T_IDXS, model_data.velocity.x)**2 \
-                                              + interp(t, T_IDXS, model_data.velocity.y)**2) \
-                                                for t in self.nnff_future_times]
-          future_curvatures = [desired_curvature] + [interp(t, T_IDXS, lat_plan.curvatures) for t in self.nnff_future_times]
+        if model_data is not None and len(model_data.acceleration.y) >= CONTROL_N:
+          future_lat_accels = [desired_lateral_accel] + [interp(t, T_IDXS, model_data.acceleration.y) for t in self.nnff_future_times]
           future_rolls = [interp(t, T_IDXS, model_data.orientation.x) + roll for t in self.nnff_future_times]
         else:
-          future_speeds = [CS.vEgo] + [CS.vEgo] * len(self.nnff_future_times)
-          future_curvatures = [desired_curvature] + [desired_curvature] * len(self.nnff_future_times)
+          future_lat_accels = [desired_lateral_accel] + [desired_lateral_accel] * len(self.nnff_future_times)
           future_rolls = [roll] * len(self.nnff_future_times)
         
         alpha = self.nnff_alpha_up_down[0 if abs(desired_lateral_accel) > abs(self.nnff_lat_accels_filtered[0].x) else 1]
-        for i,(k, v) in enumerate(zip(future_curvatures, future_speeds)):
+        for i,v in enumerate(future_lat_accels):
           self.nnff_lat_accels_filtered[i].update_alpha(alpha)
-          self.nnff_lat_accels_filtered[i].update(k * v ** 2)
+          self.nnff_lat_accels_filtered[i].update(v)
         
         lat_accels_filtered = [i.x for i in self.nnff_lat_accels_filtered]
         
