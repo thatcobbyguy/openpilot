@@ -243,7 +243,7 @@ struct CarState {
   endToEndLong @56 :Bool;
   customStockLong @57 :CustomStockLong;
 
-  autoHoldActivated @56 :Bool;
+  autoHoldActivated @58 :Bool;
 
   struct CustomStockLong {
     cruiseButton @0 :Int16;
