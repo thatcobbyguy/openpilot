@@ -127,8 +127,8 @@ class LatControlTorque(LatControl):
       if self.use_nn:
         # prepare input data for NNFF model        
         roll = params.roll
-        if model_data is not None and len(model_data.acceleration.y) >= CONTROL_N:
-          future_lat_accels = [desired_lateral_accel] + [interp(t, T_IDXS, model_data.acceleration.y) for t in self.nnff_future_times]
+        if None not in [lat_plan, model_data] and all([len(i) >= CONTROL_N for i in [model_data.orientation.x, lat_plan.curvatures]]):
+          future_lat_accels = [desired_lateral_accel] + [interp(t, T_IDXS, lat_plan.curvatures) * CS.vEgo ** 2 for t in self.nnff_future_times]
           future_rolls = [interp(t, T_IDXS, model_data.orientation.x) + roll for t in self.nnff_future_times]
         else:
           future_lat_accels = [desired_lateral_accel] + [desired_lateral_accel] * len(self.nnff_future_times)
