@@ -131,32 +131,33 @@ def maxspeed_to_ms(maxspeed: Dict[str, Union[str, float]]) -> float:
   return SPEED_CONVERSIONS[unit] * speed
 
 
-def parse_banner_instructions(instruction: Any, banners: Any, distance_to_maneuver: float = 0.0) -> None:
+def parse_banner_instructions(banners: Any, distance_to_maneuver: float = 0.0) -> Optional[Dict[str, Any]]:
   if not len(banners):
-    return
+    return None
 
-  current_banner = banners[0]
+  instruction = {}
 
   # A segment can contain multiple banners, find one that we need to show now
+  current_banner = banners[0]
   for banner in banners:
     if distance_to_maneuver < banner['distanceAlongGeometry']:
       current_banner = banner
 
   # Only show banner when close enough to maneuver
-  instruction.showFull = distance_to_maneuver < current_banner['distanceAlongGeometry']
+  instruction['showFull'] = distance_to_maneuver < current_banner['distanceAlongGeometry']
 
   # Primary
   p = current_banner['primary']
   if 'text' in p:
-    instruction.maneuverPrimaryText = p['text']
+    instruction['maneuverPrimaryText'] = p['text']
   if 'type' in p:
-    instruction.maneuverType = p['type']
+    instruction['maneuverType'] = p['type']
   if 'modifier' in p:
-    instruction.maneuverModifier = p['modifier']
+    instruction['maneuverModifier'] = p['modifier']
 
   # Secondary
   if 'secondary' in current_banner:
-    instruction.maneuverSecondaryText = current_banner['secondary']['text']
+    instruction['maneuverSecondaryText'] = current_banner['secondary']['text']
 
   # Lane lines
   if 'sub' in current_banner:
@@ -174,4 +175,6 @@ def parse_banner_instructions(instruction: Any, banners: Any, distance_to_maneuv
         lane['activeDirection'] = string_to_direction(component['active_direction'])
 
       lanes.append(lane)
-    instruction.lanes = lanes
+    instruction['lanes'] = lanes
+
+  return instruction
