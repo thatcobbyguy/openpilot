@@ -1,3 +1,5 @@
+
+import copy
 import math
 
 from cereal import log
@@ -58,6 +60,8 @@ class LatControlTorque(LatControl):
       # NNFF model takes current v_ego, a_ego, lat_accel, lat_jerk, roll, and past/desired data
       # of lat accel, lat jerk, and roll
       # Past value is computed using observed car lat accel, jerk, and roll
+      self.initial_lat_accel_factor = copy.copy(self.torque_params.latAccelFactor)
+      self.initial_friction_coef = max(0.001, copy.copy(self.torque_params.friction))
       self.nnff_time_offset = CP.steerActuatorDelay + 0.2
       future_times = [0.3, 0.6, 1.0, 1.5] # seconds in the future
       self.nnff_future_times = [i + self.nnff_time_offset for i in future_times]
@@ -153,16 +157,22 @@ class LatControlTorque(LatControl):
         self.lat_accel_deque.append(lat_accels_filtered[0])
         past_lateral_accels = [self.lat_accel_deque[min(len(self.lat_accel_deque)-1, i)] for i in self.history_frame_offsets]
         
+        if self.custom_torque:
+          friction_factor = self.torque_params.friction / self.initial_friction_coef
+          self.pid.k_f = self.initial_lat_accel_factor / max(0.5, self.torque_params.latAccelFactor)
+        else:
+          friction_factor = 1.0
         
         friction = self.torque_from_lateral_accel(0.0, self.torque_params,
                                           desired_lateral_accel - actual_lateral_accel,
-                                          lateral_accel_deadzone, friction_compensation=True) / 3
+                                          lateral_accel_deadzone, friction_compensation=True) * friction_factor / 3
         
         lat_accel_error = torque_from_setpoint - torque_from_measurement
         lateral_jerk_error = 0 if lookahead_lateral_jerk != 0 or not self.use_steering_angle else lookahead_lateral_jerk - actual_lateral_jerk
 
         
-        nnff_input = [CS.vEgo, lat_accels_filtered[0], lat_accel_error + 0.08 * lateral_jerk_error, roll] \
+        
+        nnff_input = [CS.vEgo, lat_accels_filtered[0], (lat_accel_error + 0.08 * lateral_jerk_error) * friction_factor, roll] \
                     + past_lateral_accels + lat_accels_filtered[1:] \
                     + past_rolls + future_rolls
         nnff = self.torque_from_nn(nnff_input)
