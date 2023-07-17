@@ -177,7 +177,7 @@ class LatControlTorque(LatControl):
                     + past_lateral_accels + lat_accels_filtered[1:] \
                     + past_rolls + future_rolls
         nnff = self.torque_from_nn(nnff_input) * kf
-        nnff += friction
+        #nnff += friction
         ff = nnff
       else:
         ff = self.torque_from_lateral_accel(gravity_adjusted_lateral_accel, self.torque_params,
