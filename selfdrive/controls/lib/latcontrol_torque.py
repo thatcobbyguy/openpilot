@@ -26,7 +26,6 @@ from selfdrive.modeld.constants import T_IDXS, IDX_N
 
 LOW_SPEED_X = [0, 10, 20, 30]
 LOW_SPEED_Y = [15, 13, 10, 5]
-LOW_SPEED_Y_NNFF = LOW_SPEED_Y
 
 LAT_PLAN_MIN_IDX = 5
 
@@ -111,17 +110,12 @@ class LatControlTorque(LatControl):
         actual_curvature = interp(CS.vEgo, [2.0, 5.0], [actual_curvature_vm, actual_curvature_llk])
         curvature_deadzone = 0.0
       
-      lat_accel_jerk_same_sign_lowspeed = (CS.vEgo > 7.0 or sign(desired_curvature) == sign(desired_curvature_rate))
-      lookahead = interp(CS.vEgo, [10.0, 30.0], [0.9 if lat_accel_jerk_same_sign_lowspeed else 0.2, 1.8]) # seconds
-      lookahead_upper_idx = next((i for i, val in enumerate(T_IDXS) if val > lookahead), 16)
-      lookahead_curvature_rate = get_lookahead_value(list(lat_plan.curvatureRates)[LAT_PLAN_MIN_IDX:lookahead_upper_idx], desired_curvature_rate)
-      lookahead_lateral_jerk = lookahead_curvature_rate * CS.vEgo ** 2
       desired_lateral_accel = desired_curvature * CS.vEgo ** 2
       # desired rate is the desired rate of change in the setpoint, not the absolute desired curvature
       actual_lateral_accel = actual_curvature * CS.vEgo ** 2
       lateral_accel_deadzone = curvature_deadzone * CS.vEgo ** 2
 
-      low_speed_factor = interp(CS.vEgo, LOW_SPEED_X, LOW_SPEED_Y_NNFF if self.use_nn else LOW_SPEED_Y)**2
+      low_speed_factor = interp(CS.vEgo, LOW_SPEED_X, LOW_SPEED_Y)**2
       setpoint = desired_lateral_accel + low_speed_factor * desired_curvature
       measurement = actual_lateral_accel + low_speed_factor * actual_curvature
       gravity_adjusted_lateral_accel = desired_lateral_accel - params.roll * ACCELERATION_DUE_TO_GRAVITY
@@ -131,9 +125,6 @@ class LatControlTorque(LatControl):
                                                      lateral_accel_deadzone, friction_compensation=False)
       
       error = torque_from_setpoint - torque_from_measurement
-      error_scale_factor = 1.0 / min(0.5 * (0.33*abs(desired_lateral_accel) + 0.5*abs(lookahead_lateral_jerk)) + 1.0, self.error_downscale)
-      error *= error_scale_factor
-      pid_log.error = error
         
       if self.use_nn:
         # prepare input data for NNFF model        
@@ -164,16 +155,14 @@ class LatControlTorque(LatControl):
           friction_factor = 1.0
           kf = 1.0
         
-        friction = self.torque_from_lateral_accel(0.0, self.torque_params,
-                                          desired_lateral_accel - actual_lateral_accel,
-                                          lateral_accel_deadzone, friction_compensation=True) * friction_factor / 3
-        
         lat_accel_error = torque_from_setpoint - torque_from_measurement
-        lateral_jerk_error = 0 if lookahead_lateral_jerk != 0 or not self.use_steering_angle else lookahead_lateral_jerk - actual_lateral_jerk
+        desired_lateral_jerk = desired_curvature_rate * CS.vEgo ** 2
+        lateral_jerk_error = 0 if not self.use_steering_angle else desired_lateral_jerk - actual_lateral_jerk
 
+        error_scale_factor = 1.0 / min(0.5 * (0.33*abs(desired_lateral_accel) + 0.5*abs(desired_lateral_jerk)) + 1.0, self.error_downscale)
+        error *= error_scale_factor
         
-        
-        nnff_input = [CS.vEgo, lat_accels_filtered[0], (lat_accel_error + 0.08 * lateral_jerk_error) * friction_factor, roll] \
+        nnff_input = [CS.vEgo, lat_accels_filtered[0], (lat_accel_error + 0.05 * lateral_jerk_error) * friction_factor, roll] \
                     + past_lateral_accels + lat_accels_filtered[1:] \
                     + past_rolls + future_rolls
         nnff = self.torque_from_nn(nnff_input) * kf
@@ -183,6 +172,8 @@ class LatControlTorque(LatControl):
         ff = self.torque_from_lateral_accel(gravity_adjusted_lateral_accel, self.torque_params,
                                           desired_lateral_accel - actual_lateral_accel,
                                           lateral_accel_deadzone, friction_compensation=True)
+        
+      pid_log.error = error
 
       freeze_integrator = steer_limited or CS.steeringPressed or CS.vEgo < 5
       output_torque = self.pid.update(pid_log.error,
