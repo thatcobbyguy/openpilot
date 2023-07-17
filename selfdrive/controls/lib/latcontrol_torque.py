@@ -159,9 +159,10 @@ class LatControlTorque(LatControl):
         
         if self.custom_torque:
           friction_factor = self.torque_params.friction / self.initial_friction_coef
-          self.pid.k_f = self.initial_lat_accel_factor / max(0.5, self.torque_params.latAccelFactor)
+          kf = self.initial_lat_accel_factor / max(0.5, self.torque_params.latAccelFactor)
         else:
           friction_factor = 1.0
+          kf = 1.0
         
         friction = self.torque_from_lateral_accel(0.0, self.torque_params,
                                           desired_lateral_accel - actual_lateral_accel,
@@ -175,7 +176,7 @@ class LatControlTorque(LatControl):
         nnff_input = [CS.vEgo, lat_accels_filtered[0], (lat_accel_error + 0.08 * lateral_jerk_error) * friction_factor, roll] \
                     + past_lateral_accels + lat_accels_filtered[1:] \
                     + past_rolls + future_rolls
-        nnff = self.torque_from_nn(nnff_input)
+        nnff = self.torque_from_nn(nnff_input) * kf
         nnff += friction
         ff = nnff
       else:
