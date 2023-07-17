@@ -221,8 +221,9 @@ class RouteEngine:
     # Current instruction
     msg.navInstruction.maneuverDistance = distance_to_maneuver_along_geometry
     instruction = parse_banner_instructions(step['bannerInstructions'], distance_to_maneuver_along_geometry)
-    for k,v in instruction.items():
-      setattr(msg.navInstruction, k, v)
+    if instruction is not None:
+      for k,v in instruction.items():
+        setattr(msg.navInstruction, k, v)
 
     # All instructions
     maneuvers = []
