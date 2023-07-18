@@ -34,7 +34,6 @@ LAT_ACC_THRESHOLD = 1
 STEER_BUCKET_BOUNDS = [(-0.5, -0.3), (-0.3, -0.2), (-0.2, -0.1), (-0.1, 0), (0, 0.1), (0.1, 0.2), (0.2, 0.3), (0.3, 0.5)]
 MIN_BUCKET_POINTS = np.array([100, 300, 500, 500, 500, 500, 300, 100])
 MIN_ENGAGE_BUFFER = 2  # secs
-KF_LIMITS = [0.5, 2.0]
 
 VERSION = 1  # bump this to invalidate old parameter caches
 ALLOWED_CARS = ['toyota', 'hyundai']
@@ -121,7 +120,6 @@ class TorqueEstimator:
     if CP.lateralTuning.which() == 'torque':
       self.offline_friction = CP.lateralTuning.torque.friction
       self.offline_latAccelFactor = CP.lateralTuning.torque.latAccelFactor
-      self.offline_kf = CP.lateralTuning.torque.kf
 
     self.reset()
 
@@ -129,8 +127,7 @@ class TorqueEstimator:
       'latAccelFactor': self.offline_latAccelFactor,
       'latAccelOffset': 0.0,
       'frictionCoefficient': self.offline_friction,
-      'points': [],
-      'kf' : 1.0,
+      'points': []
     }
     self.decay = MIN_FILTER_DECAY
     self.min_lataccel_factor = (1.0 - self.factor_sanity) * self.offline_latAccelFactor
@@ -156,12 +153,6 @@ class TorqueEstimator:
           initial_params['points'] = cache_ltp.points
           self.decay = cache_ltp.decay
           self.filtered_points.load_points(initial_params['points'])
-          
-          # restore live kf
-          kf = cache_ltp.kf
-          if not KF_LIMITS[0] <= kf <= KF_LIMITS[1]:
-            kf = self.offline_kf
-          initial_params['kf'] = kf
           
           cloudlog.info("restored torque params from cache")
       except Exception:
@@ -248,7 +239,7 @@ class TorqueEstimator:
         liveTorqueParameters.liveValid = True
         latAccelFactor = np.clip(latAccelFactor, self.min_lataccel_factor, self.max_lataccel_factor)
         frictionCoeff = np.clip(frictionCoeff, self.min_friction, self.max_friction)
-        self.update_params({'latAccelFactor': latAccelFactor, 'latAccelOffset': latAccelOffset, 'frictionCoefficient': frictionCoeff, 'kf': kf})
+        self.update_params({'latAccelFactor': latAccelFactor, 'latAccelOffset': latAccelOffset, 'frictionCoefficient'})
     else:
       liveTorqueParameters.liveValid = False
 
