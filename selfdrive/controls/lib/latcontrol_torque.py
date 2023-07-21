@@ -117,7 +117,7 @@ class LatControlTorque(LatControl):
         # prepare future roll, lat accel, and lat accel error
         if None not in [lat_plan, model_data] and all([len(i) >= CONTROL_N for i in [model_data.orientation.x, lat_plan.curvatures]]):
           adjusted_future_times = [t + 0.5*CS.aEgo*(t/max(CS.vEgo, 1.0)) for t in self.nnff_future_times]
-          future_planned_lat_accels = [actual_lateral_accel] + [interp(t, T_IDXS[:CONTROL_N], lat_plan.curvatures) * CS.vEgo ** 2 for t in adjusted_future_times]
+          future_planned_lat_accels = [desired_lateral_accel] + [interp(t, T_IDXS[:CONTROL_N], lat_plan.curvatures) * CS.vEgo ** 2 for t in adjusted_future_times]
           future_rolls = [interp(t, T_IDXS, model_data.orientation.x) + roll for t in adjusted_future_times]
         else:
           future_planned_lat_accels = [desired_lateral_accel] * (len(self.nnff_future_times) + 1)
